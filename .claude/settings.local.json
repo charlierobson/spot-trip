@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod +x /Users/charlierobson/gh/spot-trip/SpotifyRemote/Tools/recorder)",
+      "Bash(dotnet build *)",
+      "Bash(chmod +x /Users/charlierobson/gh/spot-trip/SpotifyRemote/bin/Debug/net10.0/Tools/recorder)"
+    ]
+  }
+}

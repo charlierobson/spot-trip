@@ -1,0 +1,460 @@
+@model SpotifyRemote.Models.PlayerViewModel
+@{
+    ViewData["Title"] = "Player";
+    var activePlaylist = Model.Playlists.FirstOrDefault(p => p.Id == Model.ActivePlaylistId);
+    var currentTrackUri = Model.Playback?.CurrentTrack?.Uri ?? "";
+    var playlistUri = activePlaylist?.Uri ?? "";
+    var playlistId = Model.ActivePlaylistId ?? "";
+}
+
+<div class="row" style="min-height: calc(100vh - 160px);">
+
+    <!-- Sidebar: playlist list -->
+    <div class="col-md-3 col-lg-2 pe-0" style="border-right: 1px solid #282828; overflow-y: auto; max-height: calc(100vh - 160px);">
+        <div class="px-2 py-2">
+            <div class="text-muted small text-uppercase fw-bold mb-2 px-2">Your Playlists</div>
+            @foreach (var pl in Model.Playlists)
+            {
+                <a href="/player/playlist/@pl.Id"
+                   class="d-flex align-items-center gap-2 p-2 rounded text-decoration-none playlist-item @(pl.Id == Model.ActivePlaylistId ? "active" : "")">
+                    @if (!string.IsNullOrEmpty(pl.ImageUrl))
+                    {
+                        <img src="@pl.ImageUrl" alt="" />
+                    }
+                    else
+                    {
+                        <div class="placeholder-img"></div>
+                    }
+                    <div class="overflow-hidden">
+                        <div class="text-truncate small fw-semibold @(pl.Id == Model.ActivePlaylistId ? "text-dark" : "text-white")">@pl.Name</div>
+                        <div class="text-truncate" style="font-size: 0.75rem; color: @(pl.Id == Model.ActivePlaylistId ? "#333" : "#aaa");">@pl.TrackCount tracks</div>
+                    </div>
+                </a>
+            }
+        </div>
+    </div>
+
+    <!-- Main content: track list or welcome -->
+    <div class="col-md-9 col-lg-10 ps-0">
+
+        @if (activePlaylist != null)
+        {
+            <!-- Playlist header -->
+            <div class="d-flex align-items-end gap-3 p-4" style="background: linear-gradient(180deg, #1a3a1a 0%, #121212 100%);">
+                @if (!string.IsNullOrEmpty(activePlaylist.ImageUrl))
+                {
+                    <img src="@activePlaylist.ImageUrl" alt="" style="width: 160px; height: 160px; border-radius: 4px; object-fit: cover; box-shadow: 0 4px 20px rgba(0,0,0,0.5);" />
+                }
+                <div>
+                    <div class="text-muted small text-uppercase">Playlist</div>
+                    <h2 class="fw-bold mb-1">@activePlaylist.Name</h2>
+                    @if (!string.IsNullOrEmpty(activePlaylist.Description))
+                    {
+                        <p class="text-muted small mb-2">@activePlaylist.Description</p>
+                    }
+                    <div class="text-muted small mb-3">@activePlaylist.TrackCount tracks</div>
+                </div>
+            </div>
+
+            <!-- Queue controls bar -->
+            <div class="d-flex align-items-center justify-content-between px-4 py-2" style="border-bottom: 1px solid #282828; min-height: 48px;">
+                <div id="selection-ui" class="d-flex align-items-center gap-3" style="min-width: 0; flex: 1 1 auto;">
+                    <label class="text-muted small mb-0 flex-shrink-0" style="cursor: pointer;">
+                        <input type="checkbox" id="select-all" class="me-1" /> Select all
+                    </label>
+                    <div class="d-flex align-items-center gap-3 flex-nowrap ms-auto" style="min-width: 0;">
+                        <div class="d-flex align-items-center gap-1 flex-shrink-0">
+                            <span class="text-muted small">WAV</span>
+                            <div class="form-check form-switch mb-0 mx-1">
+                                <input class="form-check-input" type="checkbox" id="format-toggle" checked style="cursor:pointer;" />
+                            </div>
+                            <span class="text-muted small">FLAC</span>
+                        </div>
+                        <div class="d-flex align-items-center gap-1 flex-shrink-0">
+                            <span class="text-muted small">Skip existing</span>
+                            <div class="form-check form-switch mb-0 mx-1">
+                                <input class="form-check-input" type="checkbox" id="skip-existing-toggle" style="cursor:pointer;" />
+                            </div>
+                        </div>
+                        <button type="button" id="play-selected-btn" class="btn btn-spotify btn-sm" disabled style="white-space: nowrap; flex-shrink: 0;">
+                            ▶ Play Selected (0)
+                        </button>
+                    </div>
+                </div>
+                <div id="managed-ui" class="d-flex align-items-center gap-3" style="min-width: 0; flex-shrink: 0; white-space: nowrap; display: none !important;">
+                    <span class="text-spotify small">Playing <span id="queue-pos">@((Model.Queue?.CurrentIndex ?? 0) + 1)</span> of <span id="queue-total">@(Model.Queue?.Total ?? 0)</span> <span id="queue-time-left" class="ms-3" style="white-space: nowrap;"></span></span>
+                </div>
+            </div>
+
+            <!-- Track list -->
+            <div class="px-4">
+                <table class="table table-dark table-borderless" style="background: transparent;">
+                    <thead>
+                        <tr class="text-muted small border-bottom" style="border-color: #333 !important;">
+                            <th style="width: 32px;"></th>
+                            <th style="width: 40px;">#</th>
+                            <th>Title</th>
+                            <th class="d-none d-md-table-cell">Album</th>
+                            <th style="width: 60px; text-align: right;">⏱</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @for (int i = 0; i < Model.PlaylistTracks.Count; i++)
+                        {
+                            var track = Model.PlaylistTracks[i];
+                            var isCurrent = track.Uri == currentTrackUri;
+                            <tr class="track-row @(isCurrent ? "current-track" : "")"
+                                data-track-uri="@track.Uri"
+                                data-track-id="@track.Id"
+                                data-track-name="@track.Name"
+                                data-artists="@track.Artists"
+                                data-album="@track.Album"
+                                data-duration-ms="@track.DurationMs"
+                                data-track-number="@track.TrackNumber"
+                                data-image-url="@track.ImageUrl">
+                                <td class="align-middle" style="width: 32px;">
+                                    <input type="checkbox" class="track-select" />
+                                </td>
+                                <td class="text-muted align-middle" style="font-size: 0.85rem;">
+                                    <span class="track-num @(isCurrent ? "d-none" : "")">@(i + 1)</span>
+                                    @if (isCurrent && (Model.Playback?.IsPlaying ?? false))
+                                    {
+                                        <span class="text-spotify">♪</span>
+                                    }
+                                    else if (isCurrent)
+                                    {
+                                        <span class="text-spotify">—</span>
+                                    }
+                                </td>
+                                <td class="align-middle">
+                                    <div class="d-flex align-items-center gap-2">
+                                        @if (!string.IsNullOrEmpty(track.ImageUrl))
+                                        {
+                                            <img src="@track.ImageUrl" alt="" style="width: 40px; height: 40px; border-radius: 2px;" />
+                                        }
+                                        <div>
+                                            <div class="fw-semibold @(isCurrent ? "text-spotify" : "text-white")" style="font-size: 0.9rem;">@track.Name</div>
+                                            <div class="text-muted" style="font-size: 0.8rem;">@track.Artists</div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td class="text-muted align-middle d-none d-md-table-cell" style="font-size: 0.85rem;">@track.Album</td>
+                                <td class="text-muted align-middle text-end" style="font-size: 0.85rem;">@track.DurationFormatted</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        else
+        {
+            <div class="d-flex align-items-center justify-content-center h-100 text-muted">
+                <div class="text-center">
+                    <div style="font-size: 3rem;">♪</div>
+                    <p>Select a playlist to get started</p>
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+<!-- Now Playing Bar -->
+<div class="now-playing-bar">
+    <div class="d-flex align-items-center gap-3">
+
+        <!-- Track info -->
+        <div class="d-flex align-items-center gap-2" style="min-width: 200px; flex: 1;">
+            <div id="np-img-wrap">
+                @if (Model.Playback?.CurrentTrack?.ImageUrl != null)
+                {
+                    <img id="np-img" src="@Model.Playback.CurrentTrack.ImageUrl" class="track-img" alt="" />
+                }
+                else
+                {
+                    <div class="track-img-placeholder"><span class="text-muted">♪</span></div>
+                }
+            </div>
+            <div style="overflow: hidden;">
+                <div id="np-track" class="fw-semibold text-truncate" style="font-size: 0.85rem; max-width: 180px;">
+                    @(Model.Playback?.CurrentTrack?.Name ?? "Not playing")
+                </div>
+                <div id="np-artist" class="text-muted text-truncate" style="font-size: 0.75rem; max-width: 180px;">
+                    @(Model.Playback?.CurrentTrack?.Artists ?? "")
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls + progress -->
+        <div class="flex-grow-1 d-flex flex-column align-items-center gap-1">
+            <div id="np-abort-wrap" style="display: @(Model.Queue != null && !Model.Queue.IsComplete ? "block" : "none");">
+                <form method="post" action="/player/abort">
+                    <input type="hidden" name="returnPlaylistId" value="@playlistId" />
+                    <button type="submit" class="btn btn-danger btn-sm px-4">■ Abort Queue</button>
+                </form>
+            </div>
+            </div>
+
+        </div>
+
+        <!-- Volume -->
+        <div class="d-flex align-items-center gap-2" style="min-width: 140px; justify-content: flex-end;">
+            <span class="text-muted small">🔊</span>
+            <form method="post" action="/player/volume" class="d-flex align-items-center gap-1">
+                <input type="hidden" name="returnPlaylistId" value="@playlistId" />
+                <input type="range" name="volumePercent" min="0" max="100"
+                       value="@(Model.Playback?.VolumePercent ?? 50)"
+                       class="form-range" style="width: 90px;"
+                       onchange="this.form.submit()" />
+            </form>
+            <form method="post" action="/player/open-recorder-folder" class="d-inline">
+                <input type="hidden" name="returnPlaylistId" value="@playlistId" />
+                <button type="submit" class="btn btn-secondary btn-sm" title="Open recorder output folder">📁</button>
+            </form>
+            <button type="button" id="recorder-log-toggle" class="btn btn-secondary btn-sm" title="Recorder log">📝</button>
+        </div>
+    </div>
+</div>
+
+<!-- Recorder log panel -->
+<div id="recorder-log-panel" style="display:none; position: fixed; right: 16px; bottom: 90px; width: 480px; max-width: calc(100vw - 32px); height: 260px; background: #121212; border: 1px solid #333; border-radius: 6px; box-shadow: 0 4px 20px rgba(0,0,0,0.6); z-index: 1050; flex-direction: column;">
+    <div class="d-flex align-items-center justify-content-between px-2 py-1" style="border-bottom: 1px solid #282828;">
+        <span class="text-muted small text-uppercase fw-bold">Recorder Log</span>
+        <div class="d-flex align-items-center gap-2">
+            <button type="button" id="recorder-log-clear" class="btn btn-sm btn-dark py-0 px-2" style="font-size: 0.75rem;">Clear</button>
+            <button type="button" id="recorder-log-close" class="btn btn-sm btn-dark py-0 px-2" style="font-size: 0.75rem;">✕</button>
+        </div>
+    </div>
+    <pre id="recorder-log-content" class="m-0 p-2 text-muted" style="flex: 1; overflow-y: auto; font-size: 0.75rem; white-space: pre-wrap; word-break: break-all;"></pre>
+</div>
+
+<!-- Hidden form for managed queue -->
+<form id="start-queue-form" method="post" action="/player/start-queue" class="d-none">
+    <input type="hidden" name="tracksJson" id="sq-tracks-json" />
+    <input type="hidden" name="fileExtension" id="sq-file-extension" value="flac" />
+    <input type="hidden" name="skipExistingFiles" id="sq-skip-existing" value="false" />
+    <input type="hidden" name="returnPlaylistId" value="@playlistId" />
+</form>
+
+<!-- Hidden form for click-to-play on track rows -->
+<form id="play-track-form" method="post" action="/player/play-track" class="d-none">
+    <input type="hidden" name="playlistUri" value="@playlistUri" id="pt-playlist-uri" />
+    <input type="hidden" name="trackUri" id="pt-track-uri" />
+    <input type="hidden" name="playlistId" value="@playlistId" />
+    <input type="hidden" name="trackId" id="pt-track-id" />
+    <input type="hidden" name="trackName" id="pt-track-name" />
+    <input type="hidden" name="artists" id="pt-artists" />
+    <input type="hidden" name="album" id="pt-album" />
+    <input type="hidden" name="imageUrl" id="pt-image-url" />
+    <input type="hidden" name="durationMs" id="pt-duration-ms" />
+    <input type="hidden" name="trackNumber" id="pt-track-number" />
+</form>
+
+@section Scripts {
+<script>
+    // ── Checkbox selection ────────────────────────────────────────────
+    const selectAll     = document.getElementById('select-all');
+    const playBtn       = document.getElementById('play-selected-btn');
+    const queueTimeLeft = document.getElementById('queue-time-left');
+    const formatToggle  = document.getElementById('format-toggle');
+    const formatField   = document.getElementById('sq-file-extension');
+    const skipExistingToggle = document.getElementById('skip-existing-toggle');
+    const skipExistingField = document.getElementById('sq-skip-existing');
+
+    if (formatToggle) {
+        formatToggle.addEventListener('change', () => {
+            formatField.value = formatToggle.checked ? 'flac' : 'wav';
+        });
+    }
+
+    if (skipExistingToggle && skipExistingField) {
+        skipExistingToggle.addEventListener('change', () => {
+            skipExistingField.value = skipExistingToggle.checked ? 'true' : 'false';
+        });
+    }
+
+
+
+    function updateSelectionUI() {
+        const checked = document.querySelectorAll('.track-select:checked');
+        const total   = document.querySelectorAll('.track-select');
+        if (playBtn) {
+            playBtn.disabled = checked.length === 0;
+            playBtn.textContent = `▶ Play Selected (${checked.length})`;
+        }
+        if (selectAll) selectAll.indeterminate = checked.length > 0 && checked.length < total.length;
+        if (selectAll) selectAll.checked = checked.length === total.length && total.length > 0;
+    }
+
+    document.querySelectorAll('.track-select').forEach(cb => {
+        cb.addEventListener('change', updateSelectionUI);
+    });
+
+    if (selectAll) {
+        selectAll.addEventListener('change', () => {
+            document.querySelectorAll('.track-select').forEach(cb => cb.checked = selectAll.checked);
+            updateSelectionUI();
+        });
+    }
+
+    if (playBtn) {
+        playBtn.addEventListener('click', () => {
+            const playlistUri  = '@playlistUri';
+            const playlistId   = '@playlistId';
+            const playlistName = '@Html.Raw(activePlaylist?.Name ?? "")';
+            const tracks = [...document.querySelectorAll('.track-select:checked')].map(cb => {
+                const row = cb.closest('.track-row');
+                return {
+                    trackId:     row.dataset.trackId     || '',
+                    trackUri:    row.dataset.trackUri    || '',
+                    trackName:   row.dataset.trackName   || '',
+                    artists:     row.dataset.artists     || '',
+                    album:       row.dataset.album       || '',
+                    durationMs:  parseInt(row.dataset.durationMs)  || 0,
+                    trackNumber: parseInt(row.dataset.trackNumber) || 0,
+                    imageUrl:    row.dataset.imageUrl    || null,
+                    playlistUri, playlistId, playlistName
+                };
+            });
+            document.getElementById('sq-tracks-json').value = JSON.stringify(tracks);
+            document.getElementById('start-queue-form').submit();
+        });
+    }
+
+    // ── Double-click to play a single track ───────────────────────────
+    document.querySelectorAll('.track-row').forEach(row => {
+        row.addEventListener('dblclick', () => {
+            const uri = row.dataset.trackUri;
+            if (!uri) return;
+            document.getElementById('pt-track-uri').value = uri;
+            document.getElementById('pt-track-id').value = row.dataset.trackId || '';
+            document.getElementById('pt-track-name').value = row.dataset.trackName || '';
+            document.getElementById('pt-artists').value = row.dataset.artists || '';
+            document.getElementById('pt-album').value = row.dataset.album || '';
+            document.getElementById('pt-image-url').value = row.dataset.imageUrl || '';
+            document.getElementById('pt-duration-ms').value = row.dataset.durationMs || '0';
+            document.getElementById('pt-track-number').value = row.dataset.trackNumber || '0';
+            document.getElementById('play-track-form').submit();
+        });
+    });
+
+    // ── Polling ───────────────────────────────────────────────────────
+    let pollDelay = 3000;
+    let queueHasStarted = false;
+    let advancePending = false;
+
+    let interTrackDelay = 15000;
+
+    function setQueueMode(active) {
+        const selUi     = document.getElementById('selection-ui');
+        const mngUi     = document.getElementById('managed-ui');
+        const abortWrap = document.getElementById('np-abort-wrap');
+        if (selUi)     selUi.style.display     = active ? 'none' : '';
+        if (mngUi)     mngUi.style.removeProperty('display');
+        if (mngUi)     mngUi.style.display     = active ? 'flex' : 'none';
+        if (abortWrap) abortWrap.style.display = active ? 'block' : 'none';
+    }
+
+    async function pollState() {
+        try {
+            const r    = await fetch('/player/state');
+            const data = await r.json();
+            if (!data.authenticated) return;
+
+            // Now-playing bar
+            document.getElementById('np-track').textContent  = data.trackName || 'Not playing';
+            document.getElementById('np-artist').textContent = data.artists || '';
+
+            const imgWrap = document.getElementById('np-img-wrap');
+            if (data.imageUrl) {
+                let img = document.getElementById('np-img');
+                if (!img) {
+                    imgWrap.innerHTML = '<img id="np-img" class="track-img" alt="" />';
+                    img = document.getElementById('np-img');
+                }
+                if (img.src !== data.imageUrl) img.src = data.imageUrl;
+            }
+
+
+            document.querySelectorAll('.track-row').forEach(row =>
+                row.classList.toggle('current-track', row.dataset.trackUri === data.trackUri));
+
+            // Managed queue
+            if (data.managedQueueActive) {
+                setQueueMode(true);
+                const posEl = document.getElementById('queue-pos');
+                const totEl = document.getElementById('queue-total');
+                if (posEl) posEl.textContent = data.managedCurrentIndex + 1;
+                if (totEl) totEl.textContent = data.managedTotal;
+                if (queueTimeLeft) queueTimeLeft.textContent = data.managedTimeLeft
+                    ? `· ${data.managedTimeLeft} left`
+                    : '';
+
+                if (data.playing && data.trackUri === data.managedExpectedUri)
+                    queueHasStarted = true;
+
+                if (queueHasStarted && !data.playing && !advancePending) {
+                    queueHasStarted = false;
+                    advancePending = true;
+                    setTimeout(async () => {
+                        await fetch('/player/advance', { method: 'POST' });
+                        advancePending = false;
+                    }, interTrackDelay);
+                }
+
+                // Schedule next poll based on how much of the track is left.
+                // While waiting between tracks there is no point polling at all.
+                if (advancePending) {
+                    pollDelay = interTrackDelay;
+                } else if (queueHasStarted && data.playing) {
+                    const remaining = (data.durationMs || 0) - (data.progressMs || 0);
+                    const wakeUpWindow = 30000; // start polling every 3s in the last 30s
+                    pollDelay = remaining > wakeUpWindow
+                        ? Math.min(remaining - wakeUpWindow, 60000)
+                        : 3000;
+                } else {
+                    pollDelay = 3000; // waiting for track to start
+                }
+            } else {
+                queueHasStarted = false;
+                advancePending = false;
+                setQueueMode(false);
+                pollDelay = 10000; // no active queue, low frequency
+            }
+        } catch (e) { /* ignore */ }
+    }
+
+    (function schedulePoll() {
+        setTimeout(async () => { await pollState(); schedulePoll(); }, pollDelay);
+    })();
+
+    // ── Recorder log panel (live via SSE) ──────────────────────────────
+    const recorderLogPanel   = document.getElementById('recorder-log-panel');
+    const recorderLogContent = document.getElementById('recorder-log-content');
+    const recorderLogToggle  = document.getElementById('recorder-log-toggle');
+    const recorderLogClose   = document.getElementById('recorder-log-close');
+    const recorderLogClear   = document.getElementById('recorder-log-clear');
+    const MAX_RECORDER_LOG_LINES = 500;
+
+    function appendRecorderLogLine(text) {
+        recorderLogContent.textContent += text + '\n';
+        const lines = recorderLogContent.textContent.split('\n');
+        if (lines.length > MAX_RECORDER_LOG_LINES) {
+            recorderLogContent.textContent = lines.slice(lines.length - MAX_RECORDER_LOG_LINES).join('\n');
+        }
+        recorderLogContent.scrollTop = recorderLogContent.scrollHeight;
+    }
+
+    if (recorderLogToggle) {
+        recorderLogToggle.addEventListener('click', () => {
+            const showing = recorderLogPanel.style.display !== 'none';
+            recorderLogPanel.style.display = showing ? 'none' : 'flex';
+        });
+        recorderLogClose.addEventListener('click', () => { recorderLogPanel.style.display = 'none'; });
+        recorderLogClear.addEventListener('click', () => { recorderLogContent.textContent = ''; });
+
+        const recorderLogSource = new EventSource('/logs/recorder/stream');
+        recorderLogSource.onmessage = (e) => appendRecorderLogLine(e.data);
+        recorderLogSource.onerror = () => appendRecorderLogLine('[log stream disconnected — retrying…]');
+    }
+</script>
+}

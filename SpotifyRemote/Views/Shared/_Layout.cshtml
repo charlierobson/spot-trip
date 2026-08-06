@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - Spotify Remote</title>
+    <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <style>
+        body { background: #121212; color: #fff; }
+        .navbar { background: #000 !important; }
+        .navbar-brand { color: #1DB954 !important; font-weight: 700; }
+        .nav-link { color: #ccc !important; }
+        .nav-link:hover { color: #1DB954 !important; }
+        .card { background: #1e1e1e; border: none; }
+        .list-group-item { background: #1e1e1e; border-color: #333; color: #fff; }
+        .list-group-item:hover { background: #282828; }
+        .list-group-item.active { background: #1DB954; border-color: #1DB954; color: #000; }
+        .btn-spotify { background: #1DB954; color: #000; font-weight: 600; border: none; }
+        .btn-spotify:hover { background: #1ed760; color: #000; }
+        .btn-dark-outline { border: 1px solid #555; color: #ccc; background: transparent; }
+        .btn-dark-outline:hover { background: #282828; color: #fff; }
+        .now-playing-bar {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            background: #181818; border-top: 1px solid #282828;
+            padding: 12px 20px; z-index: 1000;
+        }
+        .track-img { width: 56px; height: 56px; border-radius: 4px; object-fit: cover; }
+        .track-img-placeholder {
+            width: 56px; height: 56px; border-radius: 4px;
+            background: #333; display: flex; align-items: center; justify-content: center;
+        }
+        .progress-bar-spotify { background: #1DB954; }
+        .progress { background: #333; cursor: pointer; }
+        main { padding-bottom: 100px; }
+        .playlist-item img { width: 48px; height: 48px; border-radius: 4px; object-fit: cover; }
+        .playlist-item .placeholder-img {
+            width: 48px; height: 48px; border-radius: 4px; background: #333;
+        }
+        .track-row { cursor: pointer; transition: background 0.15s; }
+        .track-row:hover { background: #282828 !important; }
+        .track-row.current-track { background: #1a3a1a !important; }
+        .text-spotify { color: #1DB954; }
+        .text-muted { color: #aaa !important; }
+    </style>
+</head>
+<body>
+    <header>
+        <nav class="navbar navbar-expand-sm navbar-dark">
+            <div class="container-fluid">
+                <a class="navbar-brand" asp-controller="Home" asp-action="Index">
+                    ♪ Spotify Remote
+                </a>
+                <div class="navbar-nav ms-auto">
+                    @if (Context.Session.GetString("access_token") != null)
+                    {
+                        <a class="nav-link" asp-controller="Player" asp-action="Index">Player</a>
+                        <a class="nav-link" href="/auth/logout">Logout</a>
+                    }
+                    else
+                    {
+                        <a class="nav-link" href="/auth/login">Login with Spotify</a>
+                    }
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <div class="container-fluid px-4 pt-3">
+        <main role="main">
+            @RenderBody()
+        </main>
+    </div>
+
+    <script src="~/lib/jquery/dist/jquery.min.js"></script>
+    <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

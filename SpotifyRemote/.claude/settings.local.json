@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build *)",
+      "WebFetch(domain:developer.spotify.com)",
+      "WebSearch",
+      "Bash(python3 -c \"import json,sys; json.load\\(open\\('/Users/charlierobson/SpotifyRemote/appsettings.json'\\)\\); print\\('JSON valid'\\)\")"
+    ]
+  }
+}

@@ -1,0 +1,207 @@
+using System.Diagnostics;
+using Serilog;
+using Serilog.Events;
+using SpotifyRemote.Services;
+
+var logDir = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+    "Library", "Logs", "SpotifyRemote");
+Directory.CreateDirectory(logDir);
+
+var recorderLog = new RecorderLogBroadcaster();
+
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.Console()
+    .WriteTo.File(
+        Path.Combine(logDir, "spotifyremote-.log"),
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 14,
+        shared: true)
+        .WriteTo.Sink(new ActionSink(logEvent => {
+            processLogMessage(logEvent);
+        }))
+    .CreateLogger();
+
+void processLogMessage(LogEvent logEvent)
+{
+    // ConsoleTrackLogger tags every recorder stdout/stderr line it logs with
+    // a "Line" property — that's a more reliable filter than matching text,
+    // since the message template itself never contains the substituted values.
+    if (logEvent.Properties.TryGetValue("Line", out var lineValue) &&
+        lineValue is ScalarValue { Value: string line })
+    {
+        recorderLog.Publish(line);
+    }
+}
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Optional, gitignored override for secrets (e.g. Spotify:ClientSecret) —
+// a plain JSON file next to the exe, edited by hand, no dev tooling required.
+// Values here win over appsettings.json. See appsettings.Local.json.example.
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false);
+
+builder.Host.UseSerilog();
+builder.Services.AddSingleton(recorderLog);
+
+builder.Services.AddControllersWithViews();
+
+builder.Services.AddDistributedMemoryCache();
+builder.Services.AddSession(options =>
+{
+    options.IdleTimeout = TimeSpan.FromHours(2);
+    options.Cookie.HttpOnly = true;
+    options.Cookie.IsEssential = true;
+});
+
+builder.Services.AddHttpClient("spotify-accounts");
+builder.Services.AddHttpClient("spotify-api");
+
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<CaffeinateService>();
+builder.Services.AddScoped<SpotifyAuthService>();
+builder.Services.AddScoped<ITokenRefresher, SessionTokenRefresher>();
+builder.Services.AddScoped<SpotifyApiService>();
+builder.Services.AddSingleton<ITrackPlaybackHandler, ConsoleTrackLogger>();
+
+var app = builder.Build();
+
+CheckPreflight(app);
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler("/Home/Error");
+}
+
+app.UseStaticFiles();
+app.UseRouting();
+app.UseSession();
+app.UseAuthorization();
+
+app.MapControllerRoute(
+    name: "default",
+    pattern: "{controller=Home}/{action=Index}/{id?}");
+
+// Server-sent event stream of recorder output — feeds the live log panel
+// in the UI, since the recorder process has no visible terminal of its own.
+app.MapGet("/logs/recorder/stream", async (HttpContext ctx, RecorderLogBroadcaster broadcaster, CancellationToken token) =>
+{
+    ctx.Response.Headers.ContentType = "text/event-stream";
+    ctx.Response.Headers.CacheControl = "no-cache";
+
+    using var subscription = broadcaster.Subscribe(out var reader);
+    try
+    {
+        await foreach (var line in reader.ReadAllAsync(token))
+        {
+            var safe = line.Replace("\r", "").Replace("\n", " ");
+            await ctx.Response.WriteAsync($"data: {safe}\n\n", token);
+            await ctx.Response.Body.FlushAsync(token);
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        // client disconnected
+    }
+});
+
+app.Lifetime.ApplicationStarted.Register(() =>
+{
+    var url = app.Urls.FirstOrDefault() ?? "http://127.0.0.1:6502";
+    var log = app.Services.GetRequiredService<ILogger<Program>>();
+    log.LogInformation("SpotifyRemote listening at {Url}", url);
+    OpenBrowser(url);
+});
+
+app.Lifetime.ApplicationStopping.Register(() =>
+{
+    // Runs on Ctrl-C / SIGTERM (graceful shutdown only — can't run at all on
+    // a hard kill -9). Stop any in-flight recorder so its file gets flushed
+    // instead of orphaned, and close open log streams so Kestrel isn't stuck
+    // waiting on them for the rest of the shutdown timeout.
+    var log = app.Services.GetRequiredService<ILogger<Program>>();
+    log.LogInformation("Shutting down — stopping any in-flight recorder and closing log streams.");
+
+    recorderLog.CompleteAll();
+    app.Services.GetService<ITrackPlaybackHandler>()?.OnAbort();
+});
+
+try
+{
+    app.Run();
+}
+finally
+{
+    Log.CloseAndFlush();
+}
+
+static void OpenBrowser(string url)
+{
+    try
+    {
+        if (OperatingSystem.IsMacOS())
+            Process.Start("open", url);
+        else if (OperatingSystem.IsWindows())
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        else
+            Process.Start("xdg-open", url);
+    }
+    catch { }
+}
+
+static void CheckPreflight(WebApplication app)
+{
+    var log = app.Services.GetRequiredService<ILogger<Program>>();
+    var exe = Path.Combine(AppContext.BaseDirectory, "Tools", "recorder");
+
+    if (!File.Exists(exe))
+    {
+        log.LogError("PRE-FLIGHT FAILED: recorder binary not found at {Path}. " +
+                     "Copy the binary to Tools/recorder before publishing.", exe);
+        return;
+    }
+
+    log.LogInformation("PRE-FLIGHT OK: recorder found at {Path}.", exe);
+}
+
+public class ActionSink : Serilog.Core.ILogEventSink
+{
+    private readonly Action<LogEvent> _action;
+    public ActionSink(Action<LogEvent> action) => _action = action;
+    public void Emit(LogEvent logEvent) => _action(logEvent);
+}
+
+// Fans out recorder log lines to any number of connected SSE clients.
+public class RecorderLogBroadcaster
+{
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, System.Threading.Channels.Channel<string>> _subscribers = new();
+
+    public IDisposable Subscribe(out System.Threading.Channels.ChannelReader<string> reader)
+    {
+        var id = Guid.NewGuid();
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<string>();
+        _subscribers[id] = channel;
+        reader = channel.Reader;
+        return new Subscription(() => _subscribers.TryRemove(id, out _));
+    }
+
+    public void Publish(string line)
+    {
+        foreach (var channel in _subscribers.Values)
+            channel.Writer.TryWrite(line);
+    }
+
+    // Ends every open SSE connection's enumeration immediately, so Kestrel's
+    // graceful shutdown isn't left waiting on them.
+    public void CompleteAll()
+    {
+        foreach (var channel in _subscribers.Values)
+            channel.Writer.TryComplete();
+    }
+
+    private class Subscription(Action onDispose) : IDisposable
+    {
+        public void Dispose() => onDispose();
+    }
+}

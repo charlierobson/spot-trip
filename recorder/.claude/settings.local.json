@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /Users/charlierobson/.claude/projects/-Users-charlierobson-recorder/memory)"
+    ],
+    "additionalDirectories": [
+      "/Users/charlierobson/.claude/projects/-Users-charlierobson-recorder/memory"
+    ]
+  }
+}
