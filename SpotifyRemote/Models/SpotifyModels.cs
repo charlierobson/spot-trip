@@ -46,6 +46,8 @@ public class PlaybackState
         $"{ProgressMs / 60000}:{(ProgressMs % 60000 / 1000):D2}";
 }
 
+public sealed record PlaybackStateResult(bool IsAvailable, PlaybackState? Playback);
+
 public class TrackPlaybackInfo
 {
     public string TrackId { get; set; } = "";

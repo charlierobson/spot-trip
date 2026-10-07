@@ -76,6 +76,7 @@
                                 <input class="form-check-input" type="checkbox" id="skip-existing-toggle" style="cursor:pointer;" />
                             </div>
                         </div>
+                        <span class="text-muted small flex-shrink-0">Total: <span id="selected-duration" aria-live="polite">0:00</span></span>
                         <button type="button" id="play-selected-btn" class="btn btn-spotify btn-sm" disabled style="white-space: nowrap; flex-shrink: 0;">
                             ▶ Play Selected (0)
                         </button>
@@ -277,6 +278,19 @@
     function updateSelectionUI() {
         const checked = document.querySelectorAll('.track-select:checked');
         const total   = document.querySelectorAll('.track-select');
+        const durationMs = [...checked].reduce((sum, checkbox) => {
+            const duration = Number.parseInt(checkbox.closest('.track-row')?.dataset.durationMs || '0', 10);
+            return sum + (Number.isFinite(duration) ? duration : 0);
+        }, 0);
+        const durationSeconds = Math.floor(durationMs / 1000);
+        const hours = Math.floor(durationSeconds / 3600);
+        const minutes = Math.floor((durationSeconds % 3600) / 60);
+        const seconds = durationSeconds % 60;
+        const formattedDuration = hours > 0
+            ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+            : `${Math.floor(durationSeconds / 60)}:${String(seconds).padStart(2, '0')}`;
+        const selectedDuration = document.getElementById('selected-duration');
+        if (selectedDuration) selectedDuration.textContent = formattedDuration;
         if (playBtn) {
             playBtn.disabled = checked.length === 0;
             playBtn.textContent = `▶ Play Selected (${checked.length})`;
@@ -359,6 +373,10 @@
             const r    = await fetch('/player/state');
             const data = await r.json();
             if (!data.authenticated) return;
+            if (data.stateAvailable === false) {
+                pollDelay = Math.min(Math.max(pollDelay, 3000) * 2, 30000);
+                return;
+            }
 
             // Now-playing bar
             document.getElementById('np-track').textContent  = data.trackName || 'Not playing';
@@ -436,10 +454,19 @@
     const MAX_RECORDER_LOG_LINES = 500;
 
     function appendRecorderLogLine(text) {
-        recorderLogContent.textContent += text + '\n';
-        const lines = recorderLogContent.textContent.split('\n');
+        let lines = recorderLogContent.textContent.split('\n');
+        const lastLineIndex = lines.length - 2;
+        if (text.startsWith('[Progress] ') && lastLineIndex >= 0 &&
+            lines[lastLineIndex].startsWith('[Progress] ')) {
+            lines[lastLineIndex] = text;
+            recorderLogContent.textContent = lines.join('\n');
+        } else {
+            recorderLogContent.textContent += text + '\n';
+        }
+
+        lines = recorderLogContent.textContent.split('\n');
         if (lines.length > MAX_RECORDER_LOG_LINES) {
-            recorderLogContent.textContent = lines.slice(lines.length - MAX_RECORDER_LOG_LINES).join('\n');
+            recorderLogContent.textContent = lines.slice(-MAX_RECORDER_LOG_LINES).join('\n');
         }
         recorderLogContent.scrollTop = recorderLogContent.scrollHeight;
     }
@@ -453,8 +480,13 @@
         recorderLogClear.addEventListener('click', () => { recorderLogContent.textContent = ''; });
 
         const recorderLogSource = new EventSource('/logs/recorder/stream');
+        let disconnectNoticeShown = false;
         recorderLogSource.onmessage = (e) => appendRecorderLogLine(e.data);
-        recorderLogSource.onerror = () => appendRecorderLogLine('[log stream disconnected — retrying…]');
+        recorderLogSource.onerror = () => {
+            if (disconnectNoticeShown) return;
+            disconnectNoticeShown = true;
+            appendRecorderLogLine('[log stream disconnected — retrying…]');
+        };
     }
 </script>
 }

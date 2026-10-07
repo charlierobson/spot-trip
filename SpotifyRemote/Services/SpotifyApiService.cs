@@ -8,7 +8,7 @@ namespace SpotifyRemote.Services;
 public class SpotifyApiService
 {
     private readonly HttpClient _http;
-    private readonly ITrackPlaybackHandler? _playbackHandler;
+    private readonly ITrackRecorder? _trackRecorder;
 
     private readonly ILogger<SpotifyApiService> _log;
     private readonly ITokenRefresher _tokenRefresher;
@@ -16,13 +16,13 @@ public class SpotifyApiService
 
     public SpotifyApiService(IHttpClientFactory factory, ILogger<SpotifyApiService> log,
         ITokenRefresher tokenRefresher, IHostApplicationLifetime lifetime,
-        ITrackPlaybackHandler? playbackHandler = null)
+        ITrackRecorder? trackRecorder = null)
     {
         _http = factory.CreateClient("spotify-api");
         _log = log;
         _tokenRefresher = tokenRefresher;
         _lifetime = lifetime;
-        _playbackHandler = playbackHandler;
+        _trackRecorder = trackRecorder;
     }
 
     public async Task<List<SpotifyPlaylist>> GetPlaylistsAsync(string accessToken)
@@ -76,14 +76,26 @@ public class SpotifyApiService
         return tracks;
     }
 
-    public async Task<PlaybackState?> GetPlaybackStateAsync(string accessToken)
+    public async Task<PlaybackStateResult> GetPlaybackStateAsync(string accessToken)
     {
-        var json = await GetJsonAsync(accessToken,
+        using var response = await GetResponseAsync(accessToken,
             "https://api.spotify.com/v1/me/player");
-        if (json == null) return null;
+        if (response.StatusCode == System.Net.HttpStatusCode.NoContent)
+            return new PlaybackStateResult(true, null);
 
+        var content = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode || string.IsNullOrWhiteSpace(content))
+        {
+            if (!response.IsSuccessStatusCode)
+                _log.LogError("Spotify GET /v1/me/player → {Status}: {Body}",
+                    (int)response.StatusCode, content);
+            return new PlaybackStateResult(false, null);
+        }
+
+        using var json = JsonDocument.Parse(content);
         var root = json.RootElement;
-        if (root.ValueKind == JsonValueKind.Null) return null;
+        if (root.ValueKind == JsonValueKind.Null)
+            return new PlaybackStateResult(false, null);
 
         var state = new PlaybackState
         {
@@ -108,7 +120,7 @@ public class SpotifyApiService
                 ? vol.GetInt32() : 0;
         }
 
-        return state;
+        return new PlaybackStateResult(true, state);
     }
 
     public async Task<string?> GetActiveDeviceIdAsync(string accessToken)
@@ -147,8 +159,8 @@ public class SpotifyApiService
         string accessToken, string playlistUri, string trackUri,
         TrackPlaybackInfo? info = null)
     {
-        if (info != null && _playbackHandler != null)
-            await _playbackHandler.OnBeforePlayAsync(info);
+        if (info != null && _trackRecorder != null)
+            await _trackRecorder.OnBeforePlayAsync(info);
 
         var deviceId = await GetActiveDeviceIdAsync(accessToken);
         var payload = new
@@ -157,21 +169,30 @@ public class SpotifyApiService
             offset = new { uri = trackUri },
             position_ms = 0
         };
-        Func<Task>? onRetry = info != null && _playbackHandler != null
-            ? () => _playbackHandler.OnBeforePlayAsync(info)
+        Func<Task>? onRetry = info != null && _trackRecorder != null
+            ? () => _trackRecorder.OnBeforePlayAsync(info)
             : null;
         return await PutAsync(accessToken, PlayUrl(deviceId), payload, onRetry);
     }
 
     public async Task<bool> PlaySingleTrackAsync(string accessToken, TrackPlaybackInfo info)
     {
-        if (_playbackHandler != null)
-            await _playbackHandler.OnBeforePlayAsync(info);
+        var refreshedToken = await _tokenRefresher.RefreshAsync();
+        if (string.IsNullOrEmpty(refreshedToken))
+        {
+            _log.LogError("Unable to refresh Spotify token before playing {TrackName}.",
+                info.TrackName);
+            return false;
+        }
+        accessToken = refreshedToken;
+
+        if (_trackRecorder != null)
+            await _trackRecorder.OnBeforePlayAsync(info);
 
         var deviceId = await GetActiveDeviceIdAsync(accessToken);
         var payload = new { uris = new[] { info.TrackUri }, position_ms = 0 };
-        Func<Task>? onRetry = _playbackHandler != null
-            ? () => _playbackHandler.OnBeforePlayAsync(info)
+        Func<Task>? onRetry = _trackRecorder != null
+            ? () => _trackRecorder.OnBeforePlayAsync(info)
             : null;
         return await PutAsync(accessToken, PlayUrl(deviceId), payload, onRetry);
     }
@@ -206,13 +227,7 @@ public class SpotifyApiService
 
     private async Task<JsonDocument?> GetJsonAsync(string accessToken, string url)
     {
-        var response = await SendGetAsync(accessToken, url);
-
-        if ((int)response.StatusCode == 429)
-        {
-            await WaitForRetryAsync(response);
-            response = await SendGetAsync(accessToken, url);
-        }
+        using var response = await GetResponseAsync(accessToken, url);
 
         var content = await response.Content.ReadAsStringAsync();
 
@@ -226,6 +241,30 @@ public class SpotifyApiService
         if (string.IsNullOrWhiteSpace(content)) return null;
 
         return JsonDocument.Parse(content);
+    }
+
+    private async Task<HttpResponseMessage> GetResponseAsync(string accessToken, string url)
+    {
+        var response = await SendGetAsync(accessToken, url);
+
+        if ((int)response.StatusCode == 429)
+        {
+            await WaitForRetryAsync(response);
+            response.Dispose();
+            response = await SendGetAsync(accessToken, url);
+        }
+
+        if ((int)response.StatusCode == 401)
+        {
+            var newToken = await _tokenRefresher.RefreshAsync();
+            if (!string.IsNullOrEmpty(newToken))
+            {
+                response.Dispose();
+                response = await SendGetAsync(newToken, url);
+            }
+        }
+
+        return response;
     }
 
     private async Task<HttpResponseMessage> SendGetAsync(string accessToken, string url)

@@ -12,18 +12,18 @@ public class PlayerController : Controller
     private readonly SpotifyApiService _api;
     private readonly SpotifyAuthService _auth;
     private readonly CaffeinateService _caffeinate;
-    private readonly ITrackPlaybackHandler? _playbackHandler;
+    private readonly ITrackRecorder? _trackRecorder;
     private readonly ILogger<PlayerController> _log;
 
     public PlayerController(SpotifyApiService api, SpotifyAuthService auth,
         CaffeinateService caffeinate, ILogger<PlayerController> log,
-        ITrackPlaybackHandler? playbackHandler = null)
+        ITrackRecorder? trackRecorder = null)
     {
         _api = api;
         _auth = auth;
         _caffeinate = caffeinate;
         _log = log;
-        _playbackHandler = playbackHandler;
+        _trackRecorder = trackRecorder;
     }
 
     [HttpGet("/player")]
@@ -38,7 +38,7 @@ public class PlayerController : Controller
         var vm = new PlayerViewModel
         {
             Playlists = playlists,
-            Playback = playback,
+            Playback = playback.Playback,
             Queue = HttpContext.Session.GetObject<ManagedQueue>("managed_queue")
         };
 
@@ -60,7 +60,7 @@ public class PlayerController : Controller
             Playlists = playlists,
             PlaylistTracks = tracks,
             ActivePlaylistId = id,
-            Playback = playback,
+            Playback = playback.Playback,
             Queue = HttpContext.Session.GetObject<ManagedQueue>("managed_queue")
         };
 
@@ -228,7 +228,15 @@ public class PlayerController : Controller
         }
         var queue = new ManagedQueue { Tracks = tracks, CurrentIndex = 0 };
         _caffeinate.Start();
-        await _api.PlaySingleTrackAsync(token, queue.Current!);
+        if (!await _api.PlaySingleTrackAsync(token, queue.Current!))
+        {
+            _trackRecorder?.OnAbort();
+            _caffeinate.Stop();
+            _log.LogError("Queue could not start because Spotify playback failed.");
+            return returnPlaylistId != ""
+                ? RedirectToAction("Playlist", new { id = returnPlaylistId })
+                : RedirectToAction("Index");
+        }
         HttpContext.Session.SetObject("managed_queue", queue);
 
         return returnPlaylistId != ""
@@ -255,7 +263,15 @@ public class PlayerController : Controller
             return Json(new { complete = true });
         }
 
-        await _api.PlaySingleTrackAsync(token, queue.Current!);
+        if (!await _api.PlaySingleTrackAsync(token, queue.Current!))
+        {
+            HttpContext.Session.Remove("managed_queue");
+            _trackRecorder?.OnAbort();
+            _caffeinate.Stop();
+            _log.LogError("Queue stopped because Spotify playback failed for {TrackName}.",
+                queue.Current!.TrackName);
+            return Json(new { complete = true });
+        }
         HttpContext.Session.SetObject("managed_queue", queue);
 
         return Json(new { complete = false, expectedUri = queue.Current!.TrackUri });
@@ -266,7 +282,7 @@ public class PlayerController : Controller
     {
         var token = await GetValidTokenAsync();
         HttpContext.Session.Remove("managed_queue");
-        _playbackHandler?.OnAbort();
+        _trackRecorder?.OnAbort();
         _caffeinate.Stop();
         if (token != null) await _api.PauseAsync(token);
 
@@ -282,14 +298,20 @@ public class PlayerController : Controller
         var token = await GetValidTokenAsync();
         if (token == null) return Json(new { authenticated = false });
 
-        var playback = await _api.GetPlaybackStateAsync(token);
+        var playbackResult = await _api.GetPlaybackStateAsync(token);
         var queue = HttpContext.Session.GetObject<ManagedQueue>("managed_queue");
         var queueActive = queue != null && !queue.IsComplete;
+
+        if (!playbackResult.IsAvailable)
+            return Json(new { authenticated = true, stateAvailable = false });
+
+        var playback = playbackResult.Playback;
 
         if (playback == null)
             return Json(new
             {
                 authenticated = true,
+                stateAvailable = true,
                 playing = false,
                 managedQueueActive = queueActive,
                 managedExpectedUri = queue?.Current?.TrackUri,
@@ -322,6 +344,7 @@ public class PlayerController : Controller
         return Json(new
         {
             authenticated = true,
+            stateAvailable = true,
             playing = playback.IsPlaying,
             trackName = playback.CurrentTrack?.Name,
             artists = playback.CurrentTrack?.Artists,

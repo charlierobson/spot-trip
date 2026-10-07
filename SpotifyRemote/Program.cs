@@ -12,7 +12,7 @@ var recorderLog = new RecorderLogBroadcaster();
 
 Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Information()
-    .WriteTo.Console()
+    .WriteTo.Console(restrictedToMinimumLevel: LogEventLevel.Warning)
     .WriteTo.File(
         Path.Combine(logDir, "spotifyremote-.log"),
         rollingInterval: RollingInterval.Day,
@@ -25,7 +25,7 @@ Log.Logger = new LoggerConfiguration()
 
 void processLogMessage(LogEvent logEvent)
 {
-    // ConsoleTrackLogger tags every recorder stdout/stderr line it logs with
+    // Recorder state log entries use a "Line" property for the SSE window.
     // a "Line" property — that's a more reliable filter than matching text,
     // since the message template itself never contains the substituted values.
     if (logEvent.Properties.TryGetValue("Line", out var lineValue) &&
@@ -44,6 +44,7 @@ builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, relo
 
 builder.Host.UseSerilog();
 builder.Services.AddSingleton(recorderLog);
+builder.Services.AddSingleton<IRecorderLogPublisher>(recorderLog);
 
 builder.Services.AddControllersWithViews();
 
@@ -63,10 +64,12 @@ builder.Services.AddSingleton<CaffeinateService>();
 builder.Services.AddScoped<SpotifyAuthService>();
 builder.Services.AddScoped<ITokenRefresher, SessionTokenRefresher>();
 builder.Services.AddScoped<SpotifyApiService>();
-builder.Services.AddSingleton<ITrackPlaybackHandler, ConsoleTrackLogger>();
+builder.Services.AddSingleton<ITrackRecorder, ProcessTrackRecorder>();
+builder.Services.AddSingleton<ConsoleTrackLogger>();
 
 var app = builder.Build();
 
+_ = app.Services.GetRequiredService<ConsoleTrackLogger>();
 CheckPreflight(app);
 
 if (!app.Environment.IsDevelopment())
@@ -83,8 +86,7 @@ app.MapControllerRoute(
     name: "default",
     pattern: "{controller=Home}/{action=Index}/{id?}");
 
-// Server-sent event stream of recorder output — feeds the live log panel
-// in the UI, since the recorder process has no visible terminal of its own.
+// Server-sent event stream of recorder state and progress logs.
 app.MapGet("/logs/recorder/stream", async (HttpContext ctx, RecorderLogBroadcaster broadcaster, CancellationToken token) =>
 {
     ctx.Response.Headers.ContentType = "text/event-stream";
@@ -124,7 +126,7 @@ app.Lifetime.ApplicationStopping.Register(() =>
     log.LogInformation("Shutting down — stopping any in-flight recorder and closing log streams.");
 
     recorderLog.CompleteAll();
-    app.Services.GetService<ITrackPlaybackHandler>()?.OnAbort();
+    app.Services.GetService<ITrackRecorder>()?.OnAbort();
 });
 
 try
@@ -153,16 +155,16 @@ static void OpenBrowser(string url)
 static void CheckPreflight(WebApplication app)
 {
     var log = app.Services.GetRequiredService<ILogger<Program>>();
-    var exe = Path.Combine(AppContext.BaseDirectory, "Tools", "recorder");
+    var recorder = app.Services.GetRequiredService<ITrackRecorder>();
 
-    if (!File.Exists(exe))
+    if (!recorder.IsAvailable)
     {
-        log.LogError("PRE-FLIGHT FAILED: recorder binary not found at {Path}. " +
-                     "Copy the binary to Tools/recorder before publishing.", exe);
+        log.LogError("PRE-FLIGHT FAILED: recorder is unavailable. " +
+                     "Place the recorder executable in Tools/recorder before publishing.");
         return;
     }
 
-    log.LogInformation("PRE-FLIGHT OK: recorder found at {Path}.", exe);
+    log.LogInformation("PRE-FLIGHT OK: recorder is available.");
 }
 
 public class ActionSink : Serilog.Core.ILogEventSink
@@ -173,31 +175,52 @@ public class ActionSink : Serilog.Core.ILogEventSink
 }
 
 // Fans out recorder log lines to any number of connected SSE clients.
-public class RecorderLogBroadcaster
+public class RecorderLogBroadcaster : IRecorderLogPublisher
 {
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, System.Threading.Channels.Channel<string>> _subscribers = new();
+    private const int HistoryLimit = 500;
+    private readonly object _sync = new();
+    private readonly Dictionary<Guid, System.Threading.Channels.Channel<string>> _subscribers = new();
+    private readonly Queue<string> _history = new();
 
     public IDisposable Subscribe(out System.Threading.Channels.ChannelReader<string> reader)
     {
         var id = Guid.NewGuid();
         var channel = System.Threading.Channels.Channel.CreateUnbounded<string>();
-        _subscribers[id] = channel;
+        lock (_sync)
+        {
+            foreach (var line in _history)
+                channel.Writer.TryWrite(line);
+            _subscribers[id] = channel;
+        }
         reader = channel.Reader;
-        return new Subscription(() => _subscribers.TryRemove(id, out _));
+        return new Subscription(() =>
+        {
+            lock (_sync) _subscribers.Remove(id);
+        });
     }
 
     public void Publish(string line)
     {
-        foreach (var channel in _subscribers.Values)
-            channel.Writer.TryWrite(line);
+        lock (_sync)
+        {
+            _history.Enqueue(line);
+            while (_history.Count > HistoryLimit)
+                _history.Dequeue();
+            foreach (var channel in _subscribers.Values)
+                channel.Writer.TryWrite(line);
+        }
     }
 
     // Ends every open SSE connection's enumeration immediately, so Kestrel's
     // graceful shutdown isn't left waiting on them.
     public void CompleteAll()
     {
-        foreach (var channel in _subscribers.Values)
-            channel.Writer.TryComplete();
+        lock (_sync)
+        {
+            foreach (var channel in _subscribers.Values)
+                channel.Writer.TryComplete();
+            _subscribers.Clear();
+        }
     }
 
     private class Subscription(Action onDispose) : IDisposable
