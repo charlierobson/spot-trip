@@ -60,16 +60,24 @@ builder.Services.AddHttpClient("spotify-accounts");
 builder.Services.AddHttpClient("spotify-api");
 
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddSingleton<CaffeinateService>();
 builder.Services.AddScoped<SpotifyAuthService>();
 builder.Services.AddScoped<ITokenRefresher, SessionTokenRefresher>();
 builder.Services.AddScoped<SpotifyApiService>();
-builder.Services.AddSingleton<ITrackRecorder, ProcessTrackRecorder>();
-builder.Services.AddSingleton<ConsoleTrackLogger>();
+if (OperatingSystem.IsWindows())
+{
+    builder.Services.AddSingleton<ISleepInhibitor, WinSleepInhibitor>();
+    builder.Services.AddSingleton<ITrackRecorder, WinTrackRecorder>();
+}
+else
+{
+    builder.Services.AddSingleton<ISleepInhibitor, MacSleepInhibitor>();
+    builder.Services.AddSingleton<ITrackRecorder, MacTrackRecorder>();
+}
+builder.Services.AddSingleton<RecorderStatusReporter>();
 
 var app = builder.Build();
 
-_ = app.Services.GetRequiredService<ConsoleTrackLogger>();
+_ = app.Services.GetRequiredService<RecorderStatusReporter>();
 CheckPreflight(app);
 
 if (!app.Environment.IsDevelopment())
@@ -165,6 +173,14 @@ static void CheckPreflight(WebApplication app)
     }
 
     log.LogInformation("PRE-FLIGHT OK: recorder is available.");
+
+    var devices = recorder.GetAvailableDevices();
+    log.LogInformation("Recording devices ({Count}): {Devices}",
+        devices.Count, string.Join(", ", devices));
+    if (devices.Count > 0 && !devices.Any(d =>
+            d.Contains(recorder.Options.AudioDevice, StringComparison.OrdinalIgnoreCase)))
+        log.LogWarning("Configured recording device '{Device}' was not found.",
+            recorder.Options.AudioDevice);
 }
 
 public class ActionSink : Serilog.Core.ILogEventSink

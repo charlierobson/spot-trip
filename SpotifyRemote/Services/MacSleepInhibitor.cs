@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace SpotifyRemote.Services;
 
-public class CaffeinateService : IDisposable
+public class MacSleepInhibitor : ISleepInhibitor
 {
     private Process? _process;
 

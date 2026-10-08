@@ -11,12 +11,12 @@ public class PlayerController : Controller
 {
     private readonly SpotifyApiService _api;
     private readonly SpotifyAuthService _auth;
-    private readonly CaffeinateService _caffeinate;
+    private readonly ISleepInhibitor _caffeinate;
     private readonly ITrackRecorder? _trackRecorder;
     private readonly ILogger<PlayerController> _log;
 
     public PlayerController(SpotifyApiService api, SpotifyAuthService auth,
-        CaffeinateService caffeinate, ILogger<PlayerController> log,
+        ISleepInhibitor caffeinate, ILogger<PlayerController> log,
         ITrackRecorder? trackRecorder = null)
     {
         _api = api;
@@ -291,6 +291,13 @@ public class PlayerController : Controller
             : RedirectToAction("Index");
     }
 
+    [HttpGet("/player/recorder-devices")]
+    public IActionResult RecorderDevices() => Json(new
+    {
+        devices = _trackRecorder?.GetAvailableDevices() ?? [],
+        selected = _trackRecorder?.Options.AudioDevice
+    });
+
     // Polled by JS to update now-playing without a full page reload
     [HttpGet("/player/state")]
     public async Task<IActionResult> State()
@@ -385,7 +392,11 @@ public class PlayerController : Controller
             DateTime.UtcNow >= expiresAt)
         {
             var tokens = await _auth.RefreshTokenAsync(refreshToken);
-            if (tokens == null) return null;
+            if (tokens == null)
+            {
+                HttpContext.Session.Clear();
+                return null;
+            }
 
             accessToken = tokens.AccessToken;
             if (!string.IsNullOrEmpty(tokens.RefreshToken))

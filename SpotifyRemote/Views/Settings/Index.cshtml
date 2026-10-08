@@ -1,0 +1,58 @@
+@model SpotifyRemote.Controllers.SettingsViewModel
+@using SpotifyRemote.Services
+@{
+    ViewData["Title"] = "Recorder Settings";
+}
+
+<div class="row justify-content-center mt-4">
+    <div class="col-md-6 col-lg-4">
+        <h2 class="text-spotify mb-3">Recorder Settings</h2>
+
+        @if (Model.Saved)
+        {
+            <div class="alert alert-success">Settings saved.</div>
+        }
+        @if (!Model.RecorderAvailable)
+        {
+            <div class="alert alert-danger">Recorder is unavailable on this system.</div>
+        }
+
+        <form method="post" action="/settings">
+            <div class="mb-3">
+                <label for="audioDevice" class="form-label">Recording device</label>
+                <select class="form-select" id="audioDevice" name="audioDevice">
+                    @foreach (var device in Model.Devices)
+                    {
+                        <option value="@device" selected="@(device == Model.Options.AudioDevice)">@device</option>
+                    }
+                </select>
+                @if (Model.Devices.Count == 0)
+                {
+                    <div class="form-text text-muted">No recording devices were found at startup.</div>
+                }
+                else if (!Model.Devices.Contains(Model.Options.AudioDevice))
+                {
+                    <div class="form-text text-muted">Configured device '@Model.Options.AudioDevice' was not found.</div>
+                }
+            </div>
+
+            <div class="mb-3">
+                <label for="fileFormat" class="form-label">File format</label>
+                <select class="form-select" id="fileFormat" name="fileFormat">
+                    @foreach (var format in Enum.GetValues<AudioFileFormat>())
+                    {
+                        <option value="@format" selected="@(format == Model.Options.FileFormat)">@format.ToString().ToUpperInvariant()</option>
+                    }
+                </select>
+            </div>
+
+            <div class="form-check mb-4">
+                <input type="hidden" name="skipExistingFiles" value="false" />
+                <input class="form-check-input" type="checkbox" id="skipExistingFiles" name="skipExistingFiles" value="true" checked="@Model.Options.SkipExistingFiles" />
+                <label class="form-check-label" for="skipExistingFiles">Skip existing files</label>
+            </div>
+
+            <button type="submit" class="btn btn-spotify" disabled="@(Model.Devices.Count == 0)">Save</button>
+        </form>
+    </div>
+</div>

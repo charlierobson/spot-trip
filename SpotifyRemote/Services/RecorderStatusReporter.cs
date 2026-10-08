@@ -1,17 +1,17 @@
 namespace SpotifyRemote.Services;
 
-public sealed class ConsoleTrackLogger : IDisposable
+public sealed class RecorderStatusReporter : IDisposable
 {
     private readonly ITrackRecorder _recorder;
     private readonly IRecorderLogPublisher _logPublisher;
-    private readonly ILogger<ConsoleTrackLogger> _log;
+    private readonly ILogger<RecorderStatusReporter> _log;
     private readonly object _progressLock = new();
     private bool _progressLineOpen;
 
-    public ConsoleTrackLogger(
+    public RecorderStatusReporter(
         ITrackRecorder recorder,
         IRecorderLogPublisher logPublisher,
-        ILogger<ConsoleTrackLogger> log)
+        ILogger<RecorderStatusReporter> log)
     {
         _recorder = recorder;
         _logPublisher = logPublisher;

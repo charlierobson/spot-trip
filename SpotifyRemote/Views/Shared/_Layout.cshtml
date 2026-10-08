@@ -55,6 +55,7 @@
                     @if (Context.Session.GetString("access_token") != null)
                     {
                         <a class="nav-link" asp-controller="Player" asp-action="Index">Player</a>
+                        <a class="nav-link" href="/settings">Settings</a>
                         <a class="nav-link" href="/auth/logout">Logout</a>
                     }
                     else

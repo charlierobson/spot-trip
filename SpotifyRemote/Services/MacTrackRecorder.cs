@@ -5,14 +5,18 @@ using SpotifyRemote.Models;
 
 namespace SpotifyRemote.Services;
 
-public sealed class ProcessTrackRecorder(IConfiguration config) : ITrackRecorder
+public sealed class MacTrackRecorder(IConfiguration config) : ITrackRecorder
 {
     private static readonly TimeSpan ReadyTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan StopTimeout = TimeSpan.FromSeconds(5);
-    private readonly string _audioDevice = config["Recording:AudioDevice"] ?? "BlackHole 2ch";
-    private readonly bool _skipExistingFiles = config.GetValue<bool?>("Recording:SkipExistingFiles") ?? false;
+    private volatile RecorderOptions _options = new()
+    {
+        AudioDevice = config["Recording:AudioDevice"] ?? "BlackHole 2ch",
+        SkipExistingFiles = config.GetValue<bool?>("Recording:SkipExistingFiles") ?? false
+    };
     private readonly object _processLock = new();
     private readonly object _stateLock = new();
+    private readonly IReadOnlyList<string> _devices = QueryDevices();
     private Process? _currentProcess;
     private string? _currentTrackName;
     private string? _lastStateTrackName;
@@ -22,6 +26,41 @@ public sealed class ProcessTrackRecorder(IConfiguration config) : ITrackRecorder
     public event EventHandler<RecorderProgressUpdatedEventArgs>? ProgressUpdated;
 
     public bool IsAvailable => File.Exists(RecorderPath);
+
+    public RecorderOptions Options => _options;
+
+    public void Configure(RecorderOptions options) => _options = options;
+
+    public IReadOnlyList<string> GetAvailableDevices() => _devices;
+
+    private static IReadOnlyList<string> QueryDevices()
+    {
+        if (!File.Exists(RecorderPath)) return [];
+        try
+        {
+            EnsureExecutable(RecorderPath);
+            var startInfo = new ProcessStartInfo(RecorderPath)
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true
+            };
+            startInfo.ArgumentList.Add("--list");
+            using var process = Process.Start(startInfo);
+            if (process == null) return [];
+            var output = process.StandardOutput.ReadToEndAsync();
+            if (!process.WaitForExit(StopTimeout))
+            {
+                try { process.Kill(); } catch { }
+                return [];
+            }
+            return output.GetAwaiter().GetResult()
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
+        catch
+        {
+            return [];
+        }
+    }
 
     private static string RecorderPath =>
         Path.Combine(AppContext.BaseDirectory, "Tools", "recorder");
@@ -40,7 +79,7 @@ public sealed class ProcessTrackRecorder(IConfiguration config) : ITrackRecorder
             outputPath = Path.Combine(playlistFolder,
                 $"{SanitizeFilename(info.Artists)} - {SanitizeFilename(info.TrackName)}.{info.FileExtension}");
 
-            if ((_skipExistingFiles || info.SkipIfExists) && File.Exists(outputPath))
+            if ((_options.SkipExistingFiles || info.SkipIfExists) && File.Exists(outputPath))
             {
                 PublishState(info.TrackName, TrackRecorderState.Skipped,
                     "Output already exists.", outputPath);
@@ -57,7 +96,7 @@ public sealed class ProcessTrackRecorder(IConfiguration config) : ITrackRecorder
             };
             startInfo.ArgumentList.Add(outputPath);
             startInfo.ArgumentList.Add((info.DurationMs / 1000).ToString(CultureInfo.InvariantCulture));
-            startInfo.ArgumentList.Add(_audioDevice);
+            startInfo.ArgumentList.Add(_options.AudioDevice);
 
             var process = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Recorder process could not be started.");
