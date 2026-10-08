@@ -128,7 +128,7 @@ func findDevice(named name: String) -> AudioDeviceID? {
     return nil
 }
 
-func listDevices() {
+func inputDeviceNames() -> [String] {
     var propSize: UInt32 = 0
     var addr = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDevices,
@@ -139,7 +139,7 @@ func listDevices() {
     var devices = [AudioDeviceID](repeating: 0, count: count)
     AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &propSize, &devices)
 
-    print("Available input devices:")
+    var names: [String] = []
     for deviceID in devices {
         var inputAddr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStreamConfiguration,
@@ -157,6 +157,13 @@ func listDevices() {
         var nameSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         AudioObjectGetPropertyData(deviceID, &nameAddr, 0, nil, &nameSize, &cfNameRef)
         let name = cfNameRef?.takeRetainedValue() as String? ?? "(unknown)"
+        names.append(name)
+    }
+    return names
+}
+
+func listDevices() {
+    for name in inputDeviceNames() {
         print("  \(name)")
     }
 }
@@ -280,7 +287,7 @@ class Recorder {
         // Find device
         guard let deviceID = findDevice(named: deviceName) else {
             fputs("Error: no input device found matching '\(deviceName)'\n", stderr)
-            fputs("", stderr)
+            print("Available input devices:")
             listDevices()
             return 1
         }
@@ -554,10 +561,19 @@ class Recorder {
 // MARK: - Entry point
 
 let args = CommandLine.arguments
+if args.count == 2 && args[1] == "--list" {
+    for name in inputDeviceNames() {
+        print(name)
+    }
+    exit(0)
+}
+
 guard args.count == 4 else {
-    fputs("Usage: recorder <output.wav> <duration_hint_seconds> <device_name>\n", stderr)
-    fputs("       duration_hint: approximate recording length in seconds\n", stderr)
-    fputs("       device_name: substring match against input device name\n\n", stderr)
+    print("Usage: recorder <output.wav> <duration_hint_seconds> <device_name>")
+    print("       recorder --list    print input device names, one per line")
+    print("       duration_hint: approximate recording length in seconds")
+    print("       device_name: substring match against input device name\n")
+    print("Available input devices:")
     listDevices()
     exit(1)
 }
